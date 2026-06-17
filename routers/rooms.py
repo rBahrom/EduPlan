@@ -10,11 +10,33 @@ router = APIRouter(prefix="/api/rooms", tags=["Rooms"], dependencies=[Depends(ve
 
 @router.get("", response_model=list[RoomOut])
 def get_rooms(db: Session = Depends(get_db)):
+    """
+    Barcha xonalar ro'yxatini olish
+
+    **Qaytaradi:**
+    - Barcha dars xonalari ma'lumotlari
+
+    **Misol:**
+    - Xona 101, Xona 102, Fizika kabineti, ...
+    """
     return db.query(Room).all()
 
 
 @router.post("", response_model=RoomOut, status_code=201)
 def create_room(data: RoomCreate, db: Session = Depends(get_db)):
+    """
+    Yangi xona qo'shish
+
+    **Parametrlar:**
+    - **name**: Xona nomi (majburiy, unique)
+    - **capacity**: Sig'im (o'quvchilar soni, ixtiyoriy)
+
+    **Qaytaradi:**
+    - Yaratilgan xona ma'lumotlari
+
+    **Xatolik:**
+    - 400: Xona allaqachon mavjud bo'lsa
+    """
     if db.query(Room).filter(Room.name == data.name).first():
         raise HTTPException(400, f"'{data.name}' xona allaqachon mavjud")
     room = Room(name=data.name, capacity=data.capacity)
@@ -26,6 +48,15 @@ def create_room(data: RoomCreate, db: Session = Depends(get_db)):
 
 @router.delete("/{room_id}", status_code=204)
 def delete_room(room_id: int, db: Session = Depends(get_db)):
+    """
+    Xonani o'chirish
+
+    **Parametrlar:**
+    - **room_id**: Xona ID raqami
+
+    **Xatolik:**
+    - 404: Xona topilmasa
+    """
     room = db.get(Room, room_id)
     if not room:
         raise HTTPException(404, "Xona topilmadi")

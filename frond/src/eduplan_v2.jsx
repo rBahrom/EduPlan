@@ -3,12 +3,32 @@ import { useState, useEffect } from "react";
 // ═══════════════════════════════════════════════════════════
 //  API & NORMALIZATION
 // ═══════════════════════════════════════════════════════════
-const API = "http://localhost:8000/api";
+const API = "http://localhost:8070/api";
 
 const authHeaders = () => {
   const token = localStorage.getItem("eduplan_token");
   return { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) };
 };
+
+// Token eskirsa (401), avtomatik logout qilib login oynasiga qaytaramiz.
+// window.fetch ni bir marta o'raymiz — barcha API so'rovlari shu orqali o'tadi.
+if (!window.__eduplanFetchPatched) {
+  const _origFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const res = await _origFetch(...args);
+    const url = typeof args[0] === "string" ? args[0] : args[0]?.url || "";
+    // Faqat o'z API so'rovlarimiz uchun va login/refresh endpointlaridan tashqari
+    if (res.status === 401 && url.includes("/api/") && !url.includes("/api/auth/")) {
+      if (localStorage.getItem("eduplan_token")) {
+        localStorage.removeItem("eduplan_token");
+        alert("Sessiya muddati tugadi. Iltimos, qaytadan kiring.");
+        window.location.reload();
+      }
+    }
+    return res;
+  };
+  window.__eduplanFetchPatched = true;
+}
 
 const normTeacher   = t => t;
 const normSubjectV2 = s => ({ id: s.id, name: s.name, weeklyHours: s.weekly_hours });
@@ -73,6 +93,7 @@ const I = ({ n, s=18 }) => {
     eye:      <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>,
     logout:   <svg {...p}><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>,
     lock:     <svg {...p}><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+    database: <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>,
   };
   return icons[n] ?? null;
 };
@@ -214,7 +235,7 @@ function LoginPage({ onLogin }) {
       });
       if (!res.ok) { setError("Login yoki parol noto'g'ri"); return; }
       const data = await res.json();
-      localStorage.setItem("eduplan_token", data.token);
+      localStorage.setItem("eduplan_token", data.access_token);
       onLogin();
     } catch {
       setError("Server bilan ulanishda xato. Backend ishlamoqdami?");
@@ -473,14 +494,74 @@ export default function AppV2() {
 // ═══════════════════════════════════════════════════════════
 //  DASHBOARD
 // ═══════════════════════════════════════════════════════════
-function Dashboard({ teachers, subjects, rooms, classes, schedule, conflicts, setPage }) {
+function Dashboard({ teachers, subjects, rooms, classes, schedule, conflicts, setPage, toast, fetchAll }) {
   const weekFill = schedule.length > 0 ? Math.round(schedule.length / (classes.length * 6 * 7) * 100) : 0;
+  const isEmpty = classes.length === 0 && subjects.length === 0;
+  const [seeding, setSeeding] = useState(false);
+
+  const loadSeed = async () => {
+    if (seeding) return;
+    if (!isEmpty && !window.confirm("Diqqat! Bazani namuna ma'lumot bilan to'ldirish mavjud barcha ma'lumotni (jadval, fanlar, sinflar, xonalar, o'qituvchilar) o'chiradi. Davom etilsinmi?")) return;
+    setSeeding(true);
+    try {
+      const res = await fetch(`${API}/seed`, { method:"POST", headers:authHeaders() });
+      if (!res.ok) throw new Error(res.status);
+      const r = await res.json();
+      toast(`✅ Baza yuklandi: ${r.subjects} fan, ${r.classes} sinf, ${r.rooms} xona, ${r.teachers} o'qituvchi`);
+      await fetchAll();
+    } catch (err) {
+      toast(`Baza yuklashda xato: ${err.message}`, "error");
+    } finally {
+      setSeeding(false);
+    }
+  };
+
+  const clearSeed = async () => {
+    if (seeding) return;
+    if (!window.confirm("Diqqat! Bu butun bazani tozalaydi — barcha jadval, fanlar, sinflar, xonalar va o'qituvchilar o'chiriladi. Bu amalni qaytarib bo'lmaydi. Davom etilsinmi?")) return;
+    setSeeding(true);
+    try {
+      const res = await fetch(`${API}/seed`, { method:"DELETE", headers:authHeaders() });
+      if (!res.ok) throw new Error(res.status);
+      toast("🗑️ Baza tozalandi — barcha ma'lumot o'chirildi");
+      await fetchAll();
+    } catch (err) {
+      toast(`Bazani tozalashda xato: ${err.message}`, "error");
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   return (
     <div style={{ padding:32 }}>
-      <div style={{ marginBottom:28 }}>
-        <h1 style={{ fontSize:26,fontWeight:800,color:"#0F172A" }}>Xush kelibsiz! 👋</h1>
-        <p style={{ color:"#64748B",marginTop:4 }}>Maktab jadval tizimining umumiy ko'rinishi</p>
+      <div style={{ marginBottom:28,display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:16 }}>
+        <div>
+          <h1 style={{ fontSize:26,fontWeight:800,color:"#0F172A" }}>Xush kelibsiz! 👋</h1>
+          <p style={{ color:"#64748B",marginTop:4 }}>Maktab jadval tizimining umumiy ko'rinishi</p>
+        </div>
+        <div style={{ display:"flex",gap:10,flexShrink:0 }}>
+          <Btn variant={isEmpty ? "accent" : "outline"} icon="database" onClick={loadSeed}
+               style={seeding ? { opacity:.6,cursor:"wait" } : {}}>
+            {seeding ? "..." : "Namuna bazani yuklash"}
+          </Btn>
+          {!isEmpty && (
+            <Btn variant="danger" icon="trash" onClick={clearSeed}
+                 style={seeding ? { opacity:.6,cursor:"wait" } : {}}>
+              Bazani tozalash
+            </Btn>
+          )}
+        </div>
       </div>
+
+      {isEmpty && (
+        <div style={{ background:"#F0FDFA",border:"1.5px solid #99F6E4",borderRadius:16,padding:"14px 18px",marginBottom:24,display:"flex",alignItems:"center",gap:12 }}>
+          <div style={{ color:"#0D9488",flexShrink:0 }}><I n="database" s={22}/></div>
+          <div style={{ flex:1 }}>
+            <div style={{ fontWeight:700,color:"#0F766E",fontSize:14 }}>Baza bo'sh</div>
+            <div style={{ color:"#0D9488",fontSize:13,marginTop:2 }}>"Namuna bazani yuklash" tugmasini bosing — 5–11 sinf fanlari, sinflar, xonalar va o'qituvchilar avtomatik qo'shiladi.</div>
+          </div>
+        </div>
+      )}
 
       {conflicts.length > 0 && (
         <div style={{ background:"#FFF7ED",border:"1.5px solid #FED7AA",borderRadius:16,padding:"14px 18px",marginBottom:24,display:"flex",alignItems:"center",gap:12 }}>
@@ -1039,12 +1120,35 @@ function RoomsPage({ rooms, setRooms, schedule, toast }) {
 // ═══════════════════════════════════════════════════════════
 //  SCHEDULE
 // ═══════════════════════════════════════════════════════════
-function SchedulePage({ schedule, teachers, subjects, rooms, classes, toast, setModal }) {
+function SchedulePage({ schedule, teachers, subjects, rooms, classes, toast, setModal, fetchAll }) {
   const [selectedClass, setSelectedClass] = useState(classes[0]?.name || "5-A");
   const [viewMode, setViewMode]           = useState("class");
   const [selectedTeacher, setSelectedTeacher] = useState(null);
+  const [generating, setGenerating]       = useState(false);
 
   const classNames = classes.map(c=>c.name);
+
+  // Avtomatik jadval tuzish — butun algoritm backendda (OR-Tools CP-SAT).
+  // Bu yerda faqat endpointni chaqiramiz va natijani yangilaymiz.
+  const generateSchedule = async () => {
+    if (schedule.length > 0 &&
+        !window.confirm("Avtomatik jadval tuzish mavjud BARCHA darslarni o'chirib, yangidan tuzadi. Davom etilsinmi?")) return;
+    setGenerating(true);
+    try {
+      const res = await fetch(`${API}/schedule/generate`, { method:"POST", headers: authHeaders() });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        toast(data.message || data.detail || "Jadval tuzilmadi", "error");
+        return;
+      }
+      await fetchAll();   // yangilangan jadvalni bazadan qayta yuklaymiz
+      toast(`✅ ${data.message} (${data.solve_seconds}s)`);
+    } catch (e) {
+      toast("Server bilan bog'lanishda xato", "error");
+    } finally {
+      setGenerating(false);
+    }
+  };
 
   const getEntry = (day, period) => {
     if (viewMode==="class") return schedule.find(e=>e.classId===selectedClass && e.day===day && e.period===period);
@@ -1054,6 +1158,10 @@ function SchedulePage({ schedule, teachers, subjects, rooms, classes, toast, set
   return (
     <div style={{ padding:32 }}>
       <PageHeader title="Haftalik Jadval" sub="Darslarni joylashtiring va boshqaring">
+        <Btn className="no-print" variant="accent" icon="calendar" onClick={generateSchedule}
+             style={generating ? { opacity:.6, pointerEvents:"none" } : {}}>
+          {generating ? "Tuzilmoqda..." : "⚡ Avtomatik tuzish"}
+        </Btn>
         <Btn className="no-print" variant="ghost" icon="print" onClick={()=>window.print()}>Chop etish</Btn>
       </PageHeader>
 

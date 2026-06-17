@@ -29,14 +29,18 @@ class TeacherOut(BaseModel):
 # ─── SUBJECT ─────────────────────────────────────────────────────────────────
 
 class SubjectCreate(BaseModel):
-    name:         str
-    weekly_hours: int = 3
+    name:           str
+    weekly_hours:   int = 3
+    difficulty:     int = 3            # 1=yengil ... 5=og'ir
+    preferred_time: str = "any"        # "morning" | "any"
 
 
 class SubjectOut(BaseModel):
-    id:           int
-    name:         str
-    weekly_hours: int
+    id:             int
+    name:           str
+    weekly_hours:   int
+    difficulty:     int
+    preferred_time: str
 
     class Config:
         from_attributes = True
@@ -90,6 +94,7 @@ class ClassCreate(BaseModel):
     section:          str
     student_count:    int = 30
     class_teacher_id: Optional[int] = None
+    shift:            int = 1          # 1=ertalabki, 2=tushdan keyingi
 
 
 class ClassOut(BaseModel):
@@ -99,6 +104,7 @@ class ClassOut(BaseModel):
     section:          str
     student_count:    int
     class_teacher_id: Optional[int]
+    shift:            int
 
     class Config:
         from_attributes = True
@@ -118,6 +124,18 @@ class RoomOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+# ─── GENERATE (avtomatik jadval) ───────────────────────────────────────────────
+
+class GenerateOut(BaseModel):
+    ok:            bool
+    message:       str
+    placed:        int         # joylashtirilgan darslar soni
+    required:      int         # talab qilingan jami soat
+    solve_seconds: float
+    status:        str         # CP-SAT solver holati: OPTIMAL / FEASIBLE / ...
+    unplaced:      list[str]   # joylashmagan (sinf — fan — sabab) ro'yxati
 
 
 # ─── CONFLICTS ───────────────────────────────────────────────────────────────
@@ -179,8 +197,19 @@ class LoginIn(BaseModel):
 
 
 class LoginOut(BaseModel):
-    access: bool
-    token:  str
+    access:        bool
+    access_token:  str
+    refresh_token: str
+    token_type:    str = "bearer"
+
+
+class RefreshTokenIn(BaseModel):
+    refresh_token: str
+
+
+class RefreshTokenOut(BaseModel):
+    access_token: str
+    token_type:   str = "bearer"
 
 
 # ─── DASHBOARD ───────────────────────────────────────────────────────────────
@@ -198,3 +227,22 @@ class DashboardOut(BaseModel):
     lessons_count:  int
     classes_count:  int
     teacher_loads:  list[TeacherLoad]
+
+
+# ─── TIME CONFIG ───────────────────────────────────────────────────────────────
+
+class TimeConfigOut(BaseModel):
+    days_count:     int
+    shift1_periods: int
+    shift2_periods: int
+    morning_until:  int
+
+    class Config:
+        from_attributes = True
+
+
+class TimeConfigUpdate(BaseModel):
+    days_count:     int = 6
+    shift1_periods: int = 6
+    shift2_periods: int = 6
+    morning_until:  int = 4

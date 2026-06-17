@@ -12,6 +12,24 @@ DAYS_UZ = ["Dushanba", "Seshanba", "Chorshanba", "Payshanba", "Juma", "Shanba"]
 
 @router.get("", response_model=ReportOut)
 def get_report(db: Session = Depends(get_db)):
+    """
+    Dars jadvali hisoboti va statistikasi
+
+    **Qaytaradi:**
+    - **total_slots**: Jami dars joylari (sinflar × kunlar × darslar)
+    - **filled_slots**: To'ldirilgan dars joylari soni
+    - **fill_percent**: To'ldirilish foizi
+    - **total_students**: Barcha sinflardagi o'quvchilar soni
+    - **day_stats**: Har bir kun uchun darslar soni
+    - **subject_stats**: Har bir fan uchun:
+        - Darslar soni
+        - O'qituvchilar soni
+
+    **Foydalanish:**
+    - Dashboard uchun statistika
+    - Jadval to'ldirish foizini ko'rish
+    - Eng ko'p/kam o'qitiladigan fanlarni aniqlash
+    """
     all_schedule = db.query(Schedule).all()
     all_subjects = db.query(Subject).order_by(Subject.name).all()
     all_classes  = db.query(SchoolClass).all()

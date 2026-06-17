@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from database import Base, engine, get_db
-from routers import teachers, subjects, schedule, rooms, auth, classes, report
+from routers import teachers, subjects, schedule, rooms, auth, classes, report, timeconfig, seed
 from routers.auth import verify_token
 from schemas import DashboardOut, TeacherLoad
 from sqlalchemy.orm import Session
@@ -32,6 +32,8 @@ app.include_router(rooms.router)
 app.include_router(auth.router)
 app.include_router(classes.router)
 app.include_router(report.router)
+app.include_router(timeconfig.router)
+app.include_router(seed.router)
 
 
 @app.get("/api/dashboard", response_model=DashboardOut, tags=["Dashboard"], dependencies=[Depends(verify_token)])
@@ -65,4 +67,4 @@ def root():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8070, reload=True)

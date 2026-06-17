@@ -20,12 +20,28 @@ def _build_out(teacher: Teacher) -> TeacherOut:
 
 @router.get("", response_model=list[TeacherOut])
 def get_teachers(db: Session = Depends(get_db)):
+    """
+    Barcha o'qituvchilar ro'yxatini olish
+
+    **Qaytaradi:**
+    - Barcha o'qituvchilarning to'liq ma'lumotlari (fan va sinflar bilan)
+    """
     teachers = db.query(Teacher).all()
     return [_build_out(t) for t in teachers]
 
 
 @router.post("", response_model=TeacherOut, status_code=201)
 def create_teacher(data: TeacherCreate, db: Session = Depends(get_db)):
+    """
+    Yangi o'qituvchi qo'shish
+
+    **Parametrlar:**
+    - **name**: O'qituvchi F.I.Sh. (majburiy)
+    - **phone**: Telefon raqami (ixtiyoriy)
+
+    **Qaytaradi:**
+    - Yaratilgan o'qituvchi ma'lumotlari
+    """
     teacher = Teacher(name=data.name, phone=data.phone)
     db.add(teacher)
     db.commit()
@@ -35,6 +51,15 @@ def create_teacher(data: TeacherCreate, db: Session = Depends(get_db)):
 
 @router.delete("/{teacher_id}", status_code=204)
 def delete_teacher(teacher_id: int, db: Session = Depends(get_db)):
+    """
+    O'qituvchini o'chirish
+
+    **Parametrlar:**
+    - **teacher_id**: O'qituvchi ID raqami
+
+    **Eslatma:**
+    - O'chirish bilan birga barcha bog'langan ma'lumotlar (fanlar, jadval) ham o'chadi
+    """
     teacher = db.get(Teacher, teacher_id)
     if not teacher:
         raise HTTPException(404, "O'qituvchi topilmadi")
@@ -44,6 +69,20 @@ def delete_teacher(teacher_id: int, db: Session = Depends(get_db)):
 
 @router.put("/{teacher_id}/assign", response_model=TeacherOut)
 def assign_subjects_classes(teacher_id: int, data: TeacherAssign, db: Session = Depends(get_db)):
+    """
+    O'qituvchiga fanlar va sinflarni biriktirish
+
+    **Parametrlar:**
+    - **teacher_id**: O'qituvchi ID raqami
+    - **subject_ids**: Fan ID raqamlari ro'yxati
+    - **class_names**: Sinf nomlari ro'yxati (masalan: ["5-A", "5-B"])
+
+    **Qaytaradi:**
+    - Yangilangan o'qituvchi ma'lumotlari
+
+    **Eslatma:**
+    - Eski biriktirishlar o'chirib, yangilari yoziladi
+    """
     teacher = db.get(Teacher, teacher_id)
     if not teacher:
         raise HTTPException(404, "O'qituvchi topilmadi")

@@ -4,8 +4,9 @@ from sqlalchemy.orm import Session
 from typing import Optional
 from database import get_db
 from models import Schedule, Teacher, Subject, TeacherSubject
-from schemas import ScheduleCreate, ScheduleOut, ConflictOut, SwapLessonOut, SwapTeacherOut, DoSwapRequest
+from schemas import ScheduleCreate, ScheduleOut, ConflictOut, SwapLessonOut, SwapTeacherOut, DoSwapRequest, GenerateOut
 from routers.auth import verify_token
+from generator import generate_schedule
 
 router = APIRouter(prefix="/api/schedule", tags=["Schedule"], dependencies=[Depends(verify_token)])
 
@@ -46,6 +47,21 @@ def get_schedule(
     teacher_id: Optional[int] = Query(None, description="O'qituvchi bo'yicha filter"),
     db: Session = Depends(get_db),
 ):
+    """
+    Dars jadvali yozuvlarini olish
+
+    **Parametrlar (ixtiyoriy filterlar):**
+    - **class_id**: Sinf nomi (masalan: "5-A") - faqat shu sinf jadvali
+    - **teacher_id**: O'qituvchi ID - faqat shu o'qituvchi darslar
+
+    **Qaytaradi:**
+    - Dars jadvali yozuvlari ro'yxati
+    - Filter bo'lmasa - barcha darslar
+
+    **Misol:**
+    - `GET /api/schedule?class_id=5-A` - 5-A sinf jadvali
+    - `GET /api/schedule?teacher_id=3` - 3-ID o'qituvchi darslar
+    """
     q = db.query(Schedule)
     if class_id:
         q = q.filter(Schedule.class_id == class_id)
@@ -56,6 +72,28 @@ def get_schedule(
 
 @router.post("", response_model=ScheduleOut, status_code=201)
 def create_entry(data: ScheduleCreate, db: Session = Depends(get_db)):
+    """
+    Yangi dars qo'shish (jadvalga yozuv)
+
+    **Parametrlar:**
+    - **class_id**: Sinf nomi ("5-A")
+    - **teacher_id**: O'qituvchi ID
+    - **subject_id**: Fan ID
+    - **day**: Kun (0=Dushanba, 5=Shanba)
+    - **period**: Dars soni (1-7)
+    - **room**: Xona (ixtiyoriy)
+
+    **Qaytaradi:**
+    - Yaratilgan dars ma'lumotlari
+
+    **Xatolik:**
+    - 400: Kun yoki dars raqami noto'g'ri
+    - 409: Konflikt - sinf yoki o'qituvchi shu vaqtda band
+
+    **Eslatma:**
+    - Backend avtomatik konfliktlarni tekshiradi
+    - Bir sinf yoki o'qituvchi bir vaqtda ikki joyda bo'lolmaydi
+    """
     # Qiymat oralig'ini tekshirish
     if data.day not in VALID_DAYS:
         raise HTTPException(400, "day 0–5 orasida bo'lishi kerak")
@@ -74,8 +112,64 @@ def create_entry(data: ScheduleCreate, db: Session = Depends(get_db)):
     return entry
 
 
+# ── Avtomatik jadval tuzish (generator) ────────────────────────────────────────
+
+@router.post("/generate", response_model=GenerateOut)
+def generate(db: Session = Depends(get_db)):
+    """
+    Butun maktab uchun avtomatik dars jadvali tuzish (OR-Tools CP-SAT).
+
+    **Nima qiladi:**
+    - Bazadagi sinflar, fanlar (sinf rejasi/SubjectGrade), o'qituvchilar,
+      xonalar va vaqt sozlamalarini (TimeConfig) o'qiydi
+    - Constraint solver bilan to'qnashuvsiz jadval tuzadi:
+        - bir sinfga bir vaqtda bitta o'qituvchi/dars
+        - bir o'qituvchi bir vaqtda bitta sinfda
+        - bir xona bir vaqtda bitta sinf
+        - har fan o'z haftalik soatini oladi, og'ir fanlar tushlikkacha
+    - Eski jadvalni TOZALAB, yangi yechimni saqlaydi
+
+    **Eslatma:**
+    - Mavjud jadval to'liq qayta tuziladi (eski darslar o'chadi)
+    - O'qituvchi har (sinf, fan) uchun avtomatik tanlanadi (eng kam yuklangan,
+      fanni biladigan), agar TeacherClass biriktirilmagan bo'lsa ham ishlaydi
+    """
+    result = generate_schedule(db, time_limit_sec=30)
+
+    unplaced_msgs = [f"{c} — {s} ({why})" for (c, s, why) in result.unplaced]
+
+    if not result.ok:
+        # Yechim topilmasa eski jadvalni o'zgartirmaymiz
+        return GenerateOut(
+            ok=False, message=result.message, placed=0,
+            required=result.required, solve_seconds=result.solve_seconds,
+            status=result.status, unplaced=unplaced_msgs,
+        )
+
+    # Eski jadvalni tozalab, yangi yechimni yozamiz (bitta tranzaksiyada)
+    db.query(Schedule).delete()
+    for e in result.entries:
+        db.add(Schedule(**e))
+    db.commit()
+
+    return GenerateOut(
+        ok=True, message=result.message, placed=result.placed,
+        required=result.required, solve_seconds=result.solve_seconds,
+        status=result.status, unplaced=unplaced_msgs,
+    )
+
+
 @router.delete("/{entry_id}", status_code=204)
 def delete_entry(entry_id: int, db: Session = Depends(get_db)):
+    """
+    Darsni o'chirish (jadvaldan)
+
+    **Parametrlar:**
+    - **entry_id**: Dars ID raqami
+
+    **Xatolik:**
+    - 404: Dars topilmasa
+    """
     entry = db.get(Schedule, entry_id)
     if not entry:
         raise HTTPException(404, "Dars topilmadi")
@@ -87,6 +181,21 @@ def delete_entry(entry_id: int, db: Session = Depends(get_db)):
 
 @router.get("/conflicts", response_model=list[ConflictOut])
 def get_conflicts(db: Session = Depends(get_db)):
+    """
+    Jadvaldagi konfliktlarni topish
+
+    **Qaytaradi:**
+    - Barcha konfliktlar ro'yxati
+
+    **Konflikt turlari:**
+    - **class**: Bir sinf bir vaqtda 2 ta darsda
+    - **teacher**: Bir o'qituvchi bir vaqtda 2 ta sinfda
+    - **room**: Bir xona bir vaqtda 2 ta sinf uchun
+
+    **Foydalanish:**
+    - Jadval yaratgandan so'ng konfliktlarni tekshirish
+    - Muammoli vaqtlarni topish va tuzatish
+    """
     all_entries = db.query(Schedule).all()
     slots = defaultdict(list)
     for e in all_entries:
@@ -142,6 +251,23 @@ def find_swap(
     day: int        = Query(...),
     db: Session     = Depends(get_db),
 ):
+    """
+    O'qituvchi almashtirishni topish
+
+    **Parametrlar:**
+    - **teacher_id**: O'qituvchi ID
+    - **day**: Kun (0-5)
+
+    **Qaytaradi:**
+    - Shu kundagi har bir dars uchun:
+        - Dars ma'lumotlari
+        - Almashtirish mumkin bo'lgan o'qituvchilar ro'yxati
+
+    **Foydalanish:**
+    - O'qituvchi kasallansa yoki kelmasa
+    - Boshqa o'qituvchi kim almashtira olishini topish
+    - Faqat shu fanni o'qitadigan va bu vaqtda bo'sh o'qituvchilar ko'rsatiladi
+    """
     lessons = db.query(Schedule).filter(
         Schedule.teacher_id == teacher_id,
         Schedule.day == day,
@@ -184,6 +310,23 @@ def find_swap(
 
 @router.post("/swap", response_model=ScheduleOut)
 def do_swap(data: DoSwapRequest, db: Session = Depends(get_db)):
+    """
+    O'qituvchini almashtirish (swap qilish)
+
+    **Parametrlar:**
+    - **lesson_id**: Dars ID raqami
+    - **new_teacher_id**: Yangi o'qituvchi ID
+
+    **Qaytaradi:**
+    - Yangilangan dars ma'lumotlari
+
+    **Xatolik:**
+    - 404: Dars topilmasa
+    - 409: Yangi o'qituvchi shu vaqtda band bo'lsa
+
+    **Eslatma:**
+    - Konflikt tekshiruvi avtomatik amalga oshiriladi
+    """
     lesson = db.get(Schedule, data.lesson_id)
     if not lesson:
         raise HTTPException(404, "Dars topilmadi")
